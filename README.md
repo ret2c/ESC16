@@ -1,2 +1,2 @@
 # ESC16
-Jank
+Simple PS script to test for ESC16 conditions
