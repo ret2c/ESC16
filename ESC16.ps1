@@ -1,6 +1,7 @@
 ### (Hopefully) can be run from any domain-joined endpoint
 ### No idea if this will even work
 
+$creds = Get-Credential -Message "Enter credentials for remote access"
 $cas = Get-ADObject -Filter "objectClass -eq 'pKIEnrollmentService'" -SearchBase "CN=Enrollment Services,CN=Public Key Services,CN=Services,CN=Configuration,$((Get-ADDomain).DistinguishedName)" -Properties dNSHostName, name
 
 foreach($ca in $cas) {
@@ -9,7 +10,7 @@ foreach($ca in $cas) {
     Write-Host "Checking CA: $caName on $caServer"
     
     try {
-        $result = Invoke-Command -ComputerName $caServer -ScriptBlock {
+        $result = Invoke-Command -ComputerName $caServer -Credential $creds -ScriptBlock {
             param($caName)
             $disabled = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\CertSvc\Configuration\$caName\PolicyModules\CertificateAuthority_MicrosoftDefault.Policy" -Name "DisableExtensionList" -ErrorAction SilentlyContinue
             if($disabled.DisableExtensionList -like "*1.3.6.1.4.1.311.25.2*") { # szOID_NTDS_CA_SECURITY_EXT
@@ -36,7 +37,7 @@ $weakBindingDCs = @()
 
 foreach($dc in $dcs) {
     try {
-        $bindingValue = Invoke-Command -ComputerName $dc -ScriptBlock {
+        $bindingValue = Invoke-Command -ComputerName -Credential $creds $dc -ScriptBlock {
             $value = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\Kdc" -Name "StrongCertificateBindingEnforcement" -ErrorAction SilentlyContinue
             if($value) { return $value.StrongCertificateBindingEnforcement } else { return $null }
         } -ErrorAction SilentlyContinue
@@ -44,7 +45,7 @@ foreach($dc in $dcs) {
         if($bindingValue -ne 2) {
             $weakBindingDCs += "$dc (Value: $bindingValue)"
         } else {
-            Write-Host "✓ $dc - Full Enforcement (Value: 2)"
+            Write-Host "$dc - Full Enforcement (Value: 2)"
         }
     } catch {
         Write-Host "? $dc - Cannot access (Error: $($_.Exception.Message))"
