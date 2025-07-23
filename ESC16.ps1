@@ -3,7 +3,6 @@
 
 $creds = Get-Credential -Message "Enter credentials for remote access"
 $cas = Get-ADObject -Filter "objectClass -eq 'pKIEnrollmentService'" -SearchBase "CN=Enrollment Services,CN=Public Key Services,CN=Services,CN=Configuration,$((Get-ADDomain).DistinguishedName)" -Properties dNSHostName, name
-
 foreach($ca in $cas) {
     $caServer = $ca.dNSHostName
     $caName = $ca.name
@@ -11,37 +10,44 @@ foreach($ca in $cas) {
     
     try {
         $result = Invoke-Command -ComputerName $caServer -Credential $creds -ScriptBlock {
-        param($caName)
-        $vulnerable = $false
-        $policyModulesPath = "HKLM:\SYSTEM\CurrentControlSet\Services\CertSvc\Configuration\$caName\PolicyModules"
-        
-        $policyModules = Get-ChildItem -Path $policyModulesPath -ErrorAction SilentlyContinue
-        
-        if($policyModules) {
-            foreach($module in $policyModules) {
-                $moduleName = $module.PSChildName
-                
-                $disabled = Get-ItemProperty -Path $module.PSPath -Name "DisableExtensionList" -ErrorAction SilentlyContinue
-                if($disabled.DisableExtensionList -like "*1.3.6.1.4.1.311.25.2*") {
-                    Write-Host "      [VULNERABLE] Security Extension disabled in $moduleName"
-                    $vulnerable = $true
-                } else {
-                    Write-Host "      [SAFE] Security Extension enabled in $moduleName"
+            param($caName)
+            $vulnerable = $false
+            $policyModulesPath = "HKLM:\SYSTEM\CurrentControlSet\Services\CertSvc\Configuration\$caName\PolicyModules"
+            
+            $policyModules = Get-ChildItem -Path $policyModulesPath -ErrorAction SilentlyContinue
+            
+            if($policyModules) {
+                foreach($module in $policyModules) {
+                    $moduleName = $module.PSChildName
+                    
+                    $disabled = Get-ItemProperty -Path $module.PSPath -Name "DisableExtensionList" -ErrorAction SilentlyContinue
+                    if($disabled.DisableExtensionList -like "*1.3.6.1.4.1.311.25.2*") {
+                        Write-Host "      [VULNERABLE] Security Extension disabled in $moduleName"
+                        $vulnerable = $true
+                    } else {
+                        Write-Host "      [SAFE] Security Extension enabled in $moduleName"
+                    }
                 }
+            } else {
+                Write-Host "    No policy modules found or access denied"
             }
-        } else {
-            Write-Host "    No policy modules found or access denied"
-        }
+            
+            return $vulnerable
+        } -ArgumentList $caName -ErrorAction Stop
         
-        return $vulnerable
-    } -ArgumentList $caName -ErrorAction Stop
+        if($result -eq $true) {
+            Write-Host "  [ESC16 VULNERABLE] At least one policy module has Security Extension disabled!"
+        } else {
+            Write-Host "  [SAFE] All policy modules have Security Extension enabled"
+        }
+    } catch {
+        Write-Host "  [ERROR] Cannot access registry: $($_.Exception.Message)"
+    }
 }
 
 ### StrongCertificateBindingEnforcement section
-
 $dcs = Get-ADDomainController -Filter * | Select-Object -ExpandProperty Name
 $weakBindingDCs = @()
-
 foreach($dc in $dcs) {
     try {
         $bindingValue = Invoke-Command -ComputerName $dc -Credential $creds -ScriptBlock {
@@ -58,7 +64,6 @@ foreach($dc in $dcs) {
         Write-Host "? $dc - Cannot access (Error: $($_.Exception.Message))"
     }
 }
-
 if($weakBindingDCs.Count -gt 0) {
     Write-Host "`n[WEAK BIND] DCs not in Full Enforcement mode:"
     foreach($dc in $weakBindingDCs) {
