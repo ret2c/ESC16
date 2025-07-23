@@ -11,23 +11,30 @@ foreach($ca in $cas) {
     
     try {
         $result = Invoke-Command -ComputerName $caServer -Credential $creds -ScriptBlock {
-            param($caName)
-            $disabled = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\CertSvc\Configuration\$caName\PolicyModules\CertificateAuthority_MicrosoftDefault.Policy" -Name "DisableExtensionList" -ErrorAction SilentlyContinue
-            if($disabled.DisableExtensionList -like "*1.3.6.1.4.1.311.25.2*") { # szOID_NTDS_CA_SECURITY_EXT
-                return 1
-            } else {
-                return 0
-            }
-        } -ArgumentList $caName -ErrorAction Stop
+        param($caName)
+        $vulnerable = $false
+        $policyModulesPath = "HKLM:\SYSTEM\CurrentControlSet\Services\CertSvc\Configuration\$caName\PolicyModules"
         
-        if($result -eq 1) {
-            Write-Host "  [ESC16 VULNERABLE] Security Extension disabled!"
+        $policyModules = Get-ChildItem -Path $policyModulesPath -ErrorAction SilentlyContinue
+        
+        if($policyModules) {
+            foreach($module in $policyModules) {
+                $moduleName = $module.PSChildName
+                
+                $disabled = Get-ItemProperty -Path $module.PSPath -Name "DisableExtensionList" -ErrorAction SilentlyContinue
+                if($disabled.DisableExtensionList -like "*1.3.6.1.4.1.311.25.2*") {
+                    Write-Host "      [VULNERABLE] Security Extension disabled in $moduleName"
+                    $vulnerable = $true
+                } else {
+                    Write-Host "      [SAFE] Security Extension enabled in $moduleName"
+                }
+            }
         } else {
-            Write-Host "  [SAFE] Security Extension enabled"
+            Write-Host "    No policy modules found or access denied"
         }
-    } catch {
-        Write-Host "  [ERROR] Cannot access registry: $($_.Exception.Message)"
-    }
+        
+        return $vulnerable
+    } -ArgumentList $caName -ErrorAction Stop
 }
 
 ### StrongCertificateBindingEnforcement section
@@ -37,7 +44,7 @@ $weakBindingDCs = @()
 
 foreach($dc in $dcs) {
     try {
-        $bindingValue = Invoke-Command -ComputerName -Credential $creds $dc -ScriptBlock {
+        $bindingValue = Invoke-Command -ComputerName $dc -Credential $creds -ScriptBlock {
             $value = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\Kdc" -Name "StrongCertificateBindingEnforcement" -ErrorAction SilentlyContinue
             if($value) { return $value.StrongCertificateBindingEnforcement } else { return $null }
         } -ErrorAction SilentlyContinue
